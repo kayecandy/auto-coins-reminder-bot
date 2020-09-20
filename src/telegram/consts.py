@@ -1,5 +1,9 @@
 import os
 import src.env
+import logging
+
+
+logging.warning(os.getenv('TELEGRAM_URL_BASE'))
 
 class TELEGRAM:
 

@@ -1,4 +1,6 @@
 import os
+import logging
+
 
 if os.getenv('BINANCE_KEY') == None:
     from dotenv import load_dotenv
