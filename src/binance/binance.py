@@ -4,12 +4,16 @@ import time
 import hmac
 import hashlib
 import numpy as np
+import os
 from time import time
 from urllib.parse import urlencode
 from src.binance.consts import BINANCE
 from src.telegram.telegram import tg_message
 
 
+####################
+# HELPER FUNCTIONS
+####################
 def get_signature(query):
 
     queryString = bytes(urlencode(query), 'latin-1')
@@ -18,7 +22,25 @@ def get_signature(query):
     return hmac.new(secret, queryString, digestmod=hashlib.sha256).hexdigest()
 
 
-def margin_trade(stockCode, orderSide, amount, price='', orderType=BINANCE.ORDER_TYPE_MARKET, isIsolated=BINANCE.IS_ISOLATED_TRUE, timeInForce=BINANCE.TIME_IN_FORCE_GTC, responseType=BINANCE.ORDER_RESPONSE_RESULT):
+def env_candle_intervals():
+    return list(map(
+        lambda interval: getattr(BINANCE, interval),
+        os.getenv('GRAPH_CANDLE_INTERVAL').split(',')
+    ))
+
+####################
+# REQUEST FUNCTIONS
+####################
+def request_margin_trade(
+    stockCode, 
+    orderSide, 
+    amount, 
+    price='', 
+    orderType=BINANCE.ORDER_TYPE_MARKET, 
+    isIsolated=BINANCE.IS_ISOLATED_TRUE, 
+    timeInForce=BINANCE.TIME_IN_FORCE_GTC,
+    responseType=BINANCE.ORDER_RESPONSE_RESULT
+):
     ts = int(time() * 1000)
 
     query = {
@@ -42,7 +64,7 @@ def margin_trade(stockCode, orderSide, amount, price='', orderType=BINANCE.ORDER
 
 
 
-def get_margin_amount(stockCode):
+def request_margin_amount(stockCode):
     query = {
         'symbols': stockCode,
         'timestamp': int(time() * 1000)
@@ -52,6 +74,51 @@ def get_margin_amount(stockCode):
     query['signature'] = signature
 
     return requests.get(BINANCE.API_GET_MARGIN_ACCOUNT, query, headers=BINANCE.HEADER_AUTH).json()
+
+def request_moving_averages(stockCode, limit, limitBase, interval):
+    trades = requests.get(BINANCE.API_GET_SYMBOL_KLINES, {
+        'symbol'        : stockCode,
+        'limit'         : limitBase,
+        'interval'      : interval
+    }).json()
+
+    tradesAverages = list(map(lambda trade: float(trade[BINANCE.KLINE_CLOSE]), trades))
+
+
+    ma25 = np.average(tradesAverages)
+    ma7 = np.average(tradesAverages[-limit:])
+
+    return {
+        'MA7'       : ma7,
+        'MA25'      : ma25
+    }
+
+####################
+# MAIN FUNCTIONS
+####################
+
+def price_check(
+    stockCode = os.getenv('GRAPH_STOCK', 'UNIBTC'), 
+    limit = int(os.getenv('GRAPH_MA_7', 7)), 
+    limitBase = int(os.getenv('GRAPH_MA_25', 25)), 
+    intervals = env_candle_intervals()
+):
+
+    delta = float(os.getenv('GRAPH_DELTA_CHECK', 0.00001))
+
+    for interval in intervals:
+        averages = request_moving_averages(stockCode, limit, limitBase, interval)
+
+        logging.warning((interval, 'MA7 ' + str(averages['MA7']), 'MA25 ' + str(averages['MA25']), delta))
+
+        if averages['MA7'] + delta >= averages['MA25'] and averages['MA7'] - delta <= averages['MA25']:
+            tg_message(
+                '*_MA Intersect_*\n'
+                + 'Interval: ' + interval + '\n'
+                + 'MA7: ' + str(averages['MA7']).replace('.', '\\.') + '\n'
+                + 'MA25: ' + str(averages['MA25']).replace('.', '\\.')
+            )
+
 
 
 def get_slope(stockCode, limit = 7, limitBase = 25, interval = BINANCE.INTERVAL_MIN1):
@@ -77,7 +144,7 @@ def get_slope(stockCode, limit = 7, limitBase = 25, interval = BINANCE.INTERVAL_
     pMovingAverage = np.average(tradesAverages[-limit - 1:-1])
     
 
-    marginAccount = get_margin_amount(stockCode)
+    marginAccount = request_margin_amount(stockCode)
 
 
 
@@ -101,7 +168,7 @@ def get_slope(stockCode, limit = 7, limitBase = 25, interval = BINANCE.INTERVAL_
 
     if (newPosition != '' and BINANCE.position != newPosition and amount > 0):
         logging.warning(('TRANSACTION!!! ', newPosition, movingAverage))
-        margin_trade(stockCode, newPosition, amount)
+        request_margin_trade(stockCode, newPosition, amount)
         tg_message(newPosition + ' ' + str(amount) + ' UNI at ' + str(currPrice) + ' BTC')
         BINANCE.position = newPosition
 
