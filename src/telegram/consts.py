@@ -15,3 +15,6 @@ class TELEGRAM:
         # 563219073       # Ely
 
     ]
+
+    PARSE_MODE_MARKDOWN_V2 = 'MarkdownV2'
+    PARSE_MODE_HTML = 'HTML'
